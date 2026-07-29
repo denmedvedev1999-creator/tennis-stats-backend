@@ -1,165 +1,97 @@
-// tennisApi.js — Полная передача реального имени и ранга в профиль
-const axios = require('axios');
+// server.js
+const express = require('express');
+const cors = require('cors');
+const tennisApi = require('./tennisApi');
 
-const rapidApi = axios.create({
-  baseURL: 'https://tennis-api-atp-wta-itf.p.rapidapi.com',
-  headers: {
-    'X-RapidAPI-Key': process.env.RAPIDAPI_KEY || '',
-    'X-RapidAPI-Host': 'tennis-api-atp-wta-itf.p.rapidapi.com'
-  },
-  timeout: 8000
-});
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-module.exports = {
-  // 1. Поиск игроков
-  async searchPlayers(query, tour = 'atp') {
-    const rawQuery = (query || '').trim();
-    const q = rawQuery.toLowerCase();
-    const currentTour = (tour || 'atp').toLowerCase();
+// Простой хелпер для асинхронных роутов
+const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-    if (!q) return [];
+// Простейший In-Memory Кэш
+const cacheStore = new Map();
+const TTL = { SEARCH: 300, PROFILE: 600, MATCHES: 300, TOURNAMENT_PATH: 600, H2H: 600 };
 
-    try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, {
-        params: { search: rawQuery }
-      });
-
-      let list = [];
-      if (res.data) {
-        if (Array.isArray(res.data)) list = res.data;
-        else if (Array.isArray(res.data.data)) list = res.data.data;
-        else if (Array.isArray(res.data.results)) list = res.data.results;
-      }
-
-      const matches = list.filter(p => {
-        const playerName = (p.name || p.fullName || p.player_name || '').toLowerCase();
-        return playerName.includes(q);
-      });
-
-      if (matches.length > 0) {
-        return matches.slice(0, 10).map(p => ({
-          id: String(p.id || p.player_id || Math.random()),
-          name: p.name || p.fullName || p.player_name || rawQuery,
-          rank: p.currentRank ? String(p.currentRank) : (p.rank ? String(p.rank) : '—'),
-          country: p.countryAcr || (p.country && (p.country.acronym || p.country.name)) || currentTour.toUpperCase()
-        }));
-      }
-    } catch (e) {
-      console.error('Ошибка RapidAPI Search:', e.message);
+async function cached(key, ttlSeconds, fetcher) {
+  const now = Date.now();
+  if (cacheStore.has(key)) {
+    const item = cacheStore.get(key);
+    if (now < item.expiresAt && item.data && item.data.length > 0) {
+      return item.data;
     }
+  }
+  const data = await fetcher();
+  if (data) {
+    cacheStore.set(key, { data, expiresAt: now + ttlSeconds * 1000 });
+  }
+  return data;
+}
 
-    const formattedName = rawQuery
-      .split(' ')
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-      .join(' ');
+// 1. Поиск игрока
+app.get('/api/players/search', asyncRoute(async (req, res) => {
+  const { q = '', tour = 'atp' } = req.query;
+  if (!q.trim()) return res.json([]);
 
-    return [{
-      id: String(Math.abs(q.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0))),
-      name: formattedName,
-      rank: '—',
-      country: currentTour.toUpperCase()
-    }];
-  },
+  const key = `search:${tour}:${q.toLowerCase()}`;
+  
+  const result = await cached(key, TTL.SEARCH, async () => {
+    return await tennisApi.searchPlayers(q, tour);
+  });
 
-  // 2. Умный профиль (без надписи TENNIS PLAYER)
-  async getPlayerProfile(tour, id) {
-    const currentTour = (tour || 'atp').toLowerCase();
-    
-    try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, { params: { id } });
-      let p = null;
+  res.json(result);
+}));
 
-      if (res.data && res.data.data) {
-        p = Array.isArray(res.data.data) 
-          ? res.data.data.find(x => String(x.id) === String(id)) 
-          : res.data.data;
-      } else if (Array.isArray(res.data)) {
-        p = res.data.find(x => String(x.id) === String(id));
-      }
+// 2. Профиль игрока
+app.get('/api/players/:tour/:id', asyncRoute(async (req, res) => {
+  const { tour, id } = req.params;
+  const key = `profile:${tour}:${id}`;
+  const result = await cached(key, TTL.PROFILE, async () => {
+    const [profile, titles] = await Promise.all([
+      tennisApi.getPlayerProfile(tour, id),
+      tennisApi.getPlayerTitles(tour, id).catch(() => null),
+    ]);
+    return { ...profile, titles };
+  });
+  res.json(result);
+}));
 
-      if (p) {
-        return {
-          id: String(p.id),
-          name: p.name || p.fullName || p.player_name || 'Player',
-          rank: p.currentRank ? String(p.currentRank) : (p.rank ? String(p.rank) : '—'),
-          country: p.countryAcr || (p.country && (p.country.acronym || p.country.name)) || currentTour.toUpperCase(),
-          titles: p.titlesCount ?? '—',
-          turnedPro: p.turnedPro ?? '—'
-        };
-      }
-    } catch (e) {
-      console.error('Ошибка RapidAPI Profile:', e.message);
-    }
+// 3. Последние матчи игрока
+app.get('/api/players/:tour/:id/matches', asyncRoute(async (req, res) => {
+  const { tour, id } = req.params;
+  const limit = Number(req.query.limit) || 10;
+  const key = `matches:${tour}:${id}:${limit}`;
+  const result = await cached(key, TTL.MATCHES, () =>
+    tennisApi.getPlayerMatches(tour, id, { limit })
+  );
+  res.json(result);
+}));
 
-    // Если детальный профиль по ID не ответил, отдаем корректную заглушку без фейкового "TENNIS PLAYER"
-    return {
-      id: String(id),
-      name: 'Игрок ' + currentTour.toUpperCase(),
-      rank: '—',
-      country: currentTour.toUpperCase(),
-      titles: '—',
-      turnedPro: '—'
-    };
-  },
+// 4. Путь игрока по турниру
+app.get('/api/players/:tour/:id/tournaments/:tournamentId', asyncRoute(async (req, res) => {
+  const { tour, id, tournamentId } = req.params;
+  const key = `tpath:${tour}:${id}:${tournamentId}`;
+  const result = await cached(key, TTL.TOURNAMENT_PATH, () =>
+    tennisApi.getPlayerTournamentPath(tour, id, tournamentId)
+  );
+  res.json(result);
+}));
 
-  // 3. Матчи игрока
-  async getPlayerMatches(tour, id) {
-    const currentTour = (tour || 'atp').toLowerCase();
-    try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/matches/`, { 
-        params: { player_id: id } 
-      });
-      const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
-      
-      if (list.length > 0) {
-        return list.slice(0, 10).map((m, idx) => ({
-          id: String(m.id || idx),
-          opponent: m.opponent_name || m.opponent || 'Opponent',
-          tournament: m.tournament_name || m.tournament || 'Tournament',
-          tournamentId: String(m.tournament_id || 't1'),
-          round: m.round || 'Main Draw',
-          surface: m.surface || 'hard',
-          result: m.winner_id == id ? 'W' : 'L',
-          score: m.score || '—'
-        }));
-      }
-    } catch (e) {
-      console.error('Ошибка RapidAPI Matches:', e.message);
-    }
+// 5. H2H Сравнение
+app.get('/api/h2h', asyncRoute(async (req, res) => {
+  const { tour = 'atp', player1, player2 } = req.query;
+  if (!player1 || !player2) {
+    return res.status(400).json({ error: 'Нужны query-параметры player1 и player2 (id игроков)' });
+  }
+  const key = `h2h:${tour}:${player1}:${player2}`;
+  const result = await cached(key, TTL.H2H, () =>
+    tennisApi.getH2H(tour, player1, player2)
+  );
+  res.json(result);
+}));
 
-    return [
-      { id: 'm1', opponent: 'Carlos Alcaraz', tournament: 'ATP Masters 1000', tournamentId: 't1', round: 'F', surface: 'hard', result: 'W', score: '6-4, 6-3' },
-      { id: 'm2', opponent: 'Daniil Medvedev', tournament: 'Grand Slam', tournamentId: 't2', round: 'SF', surface: 'clay', result: 'L', score: '4-6, 3-6' },
-      { id: 'm3', opponent: 'Alexander Zverev', tournament: 'ATP 500', tournamentId: 't3', round: 'QF', surface: 'grass', result: 'W', score: '7-6, 6-4' }
-    ];
-  },
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-  // 4. H2H
-  async getH2H(tour, player1, player2) {
-    const currentTour = (tour || 'atp').toLowerCase();
-    try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/h2h/`, { 
-        params: { player1_id: player1, player2_id: player2 } 
-      });
-      if (res.data) return res.data;
-    } catch (e) {
-      console.error('Ошибка RapidAPI H2H:', e.message);
-    }
-
-    return {
-      total: { p1: 0, p2: 0 },
-      bySurface: { hard: { p1: 0, p2: 0 }, clay: { p1: 0, p2: 0 }, grass: { p1: 0, p2: 0 } },
-      recentMatches: []
-    };
-  },
-
-  // 5. Путь по турниру
-  async getPlayerTournamentPath(tour, id, tournamentId) {
-    return [
-      { id: 'r1', round: 'F', opponent: 'Carlos Alcaraz', result: 'W', score: '6-4, 6-3' }
-    ];
-  },
-
-  async listPlayers() { return []; },
-  async getPlayerTitles() { return 0; }
-};
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`Tennis stats backend on http://localhost:${PORT}`));
