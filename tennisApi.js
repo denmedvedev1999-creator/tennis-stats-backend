@@ -19,12 +19,13 @@ module.exports = {
     const currentTour = (tour || 'atp').toLowerCase();
 
     try {
-      // Исполняем запрос по точному URL из RapidAPI
       const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, { 
         params: { search: q } 
       });
       
       console.log(`RapidAPI status (${currentTour}):`, res.status);
+      // Выводим реальную структуру ответа API в консоль:
+      console.log('DATA FROM API:', JSON.stringify(res.data).slice(0, 300));
 
       if (res.data) {
         const list = Array.isArray(res.data) 
@@ -32,8 +33,8 @@ module.exports = {
           : (res.data.data || res.data.results || res.data.players || []);
 
         return list.slice(0, 10).map(p => ({
-          id: String(p.id || p.player_id || p.ID),
-          name: p.name || p.full_name || p.player_name || q,
+          id: String(p.id || p.player_id || p.ID || p.key || Date.now()),
+          name: p.name || p.full_name || p.player_name || p.title || q,
           rank: p.rank || p.ranking || '—',
           country: p.country || p.country_code || currentTour.toUpperCase(),
           thumb: p.image || p.image_path || null
