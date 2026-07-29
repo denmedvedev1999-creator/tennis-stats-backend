@@ -1,85 +1,49 @@
 // server.js
-// Бэкенд, который прячет ключ провайдера от клиента и кэширует ответы.
-// Клиенты (веб/мобайл) ходят только сюда — никогда напрямую в Tennis API.
-
-require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const tennisApi = require('./tennisApi');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
-// Прототип на React ходит с другого порта/origin — разрешаем CORS.
-// На проде сузь до конкретного домена фронтенда.
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  next();
-});
+// Простой хелпер для асинхронных роутов
+const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-// ---------- простой in-memory кэш с TTL ----------
-// Для продакшена замени на Redis — интерфейс (get/set) останется тем же.
-const cache = new Map();
-function cacheGet(key) {
-  const hit = cache.get(key);
-  if (!hit) return null;
-  if (Date.now() > hit.expiresAt) {
-    cache.delete(key);
-    return null;
+// Простейший In-Memory Кэш
+const cacheStore = new Map();
+const TTL = { SEARCH: 300, PROFILE: 600, MATCHES: 300, TOURNAMENT_PATH: 600, H2H: 600 };
+
+async function cached(key, ttlSeconds, fetcher) {
+  const now = Date.now();
+  if (cacheStore.has(key)) {
+    const item = cacheStore.get(key);
+    if (now < item.expiresAt && item.data && item.data.length > 0) {
+      return item.data;
+    }
   }
-  return hit.value;
-}
-function cacheSet(key, value, ttlSeconds) {
-  cache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
-}
-async function cached(key, ttlSeconds, fn) {
-  const hit = cacheGet(key);
-  if (hit) return hit;
-  const value = await fn();
-  cacheSet(key, value, ttlSeconds);
-  return value;
+  const data = await fetcher();
+  if (data) {
+    cacheStore.set(key, { data, expiresAt: now + ttlSeconds * 1000 });
+  }
+  return data;
 }
 
-// TTL по типу данных — см. tennis-app-backend-schema.md
-const TTL = {
-  SEARCH: 60 * 60 * 24, // список игроков меняется редко
-  PROFILE: 60 * 60 * 6,
-  MATCHES: 60 * 60, // короче, если идёт турнир
-  TOURNAMENT_PATH: 60 * 60 * 24,
-  H2H: 60 * 60 * 24,
-};
-
-function asyncRoute(fn) {
-  return (req, res) => fn(req, res).catch((err) => {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  });
-}
-
-// ---------- 1. Поиск игрока ----------
+// 1. Поиск игрока
 app.get('/api/players/search', asyncRoute(async (req, res) => {
   const { q = '', tour = 'atp' } = req.query;
   if (!q.trim()) return res.json([]);
 
   const key = `search:${tour}:${q.toLowerCase()}`;
+  
   const result = await cached(key, TTL.SEARCH, async () => {
-    // /search не отдаёт id/rank, поэтому сверяем найденные имена со списком игроков тура,
-    // где id и rank есть. Для маленького MVP это приемлемо; для продакшена лучше
-    // держать локальную таблицу players, синхронизируемую батчем раз в сутки.
-    const [found, allPlayers] = await Promise.all([
-      tennisApi.searchPlayers(q, tour),
-      tennisApi.listPlayers(tour, { pageSize: 100 }),
-    ]);
-    const byName = new Map(allPlayers.map((p) => [p.name, p]));
-    return found
-      .map((f) => byName.get(f.name))
-      .filter(Boolean);
+    return await tennisApi.searchPlayers(q, tour);
   });
 
   res.json(result);
 }));
 
-// ---------- 2. Профиль игрока ----------
+// 2. Профиль игрока
 app.get('/api/players/:tour/:id', asyncRoute(async (req, res) => {
   const { tour, id } = req.params;
   const key = `profile:${tour}:${id}`;
@@ -93,7 +57,7 @@ app.get('/api/players/:tour/:id', asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-// ---------- 3. Последние матчи игрока ----------
+// 3. Последние матчи игрока
 app.get('/api/players/:tour/:id/matches', asyncRoute(async (req, res) => {
   const { tour, id } = req.params;
   const limit = Number(req.query.limit) || 10;
@@ -104,7 +68,7 @@ app.get('/api/players/:tour/:id/matches', asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-// ---------- 4. Путь игрока по конкретному турниру ----------
+// 4. Путь игрока по турниру
 app.get('/api/players/:tour/:id/tournaments/:tournamentId', asyncRoute(async (req, res) => {
   const { tour, id, tournamentId } = req.params;
   const key = `tpath:${tour}:${id}:${tournamentId}`;
@@ -114,7 +78,7 @@ app.get('/api/players/:tour/:id/tournaments/:tournamentId', asyncRoute(async (re
   res.json(result);
 }));
 
-// ---------- 5. H2H ----------
+// 5. H2H Сравнение
 app.get('/api/h2h', asyncRoute(async (req, res) => {
   const { tour = 'atp', player1, player2 } = req.query;
   if (!player1 || !player2) {
@@ -122,7 +86,7 @@ app.get('/api/h2h', asyncRoute(async (req, res) => {
   }
   const key = `h2h:${tour}:${player1}:${player2}`;
   const result = await cached(key, TTL.H2H, () =>
-    tennisApi.getH2H(tour, Number(player1), Number(player2))
+    tennisApi.getH2H(tour, player1, player2)
   );
   res.json(result);
 }));
