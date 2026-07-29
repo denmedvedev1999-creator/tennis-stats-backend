@@ -1,4 +1,4 @@
-// tennisApi.js — Полный онлайн-адаптер для RapidAPI
+// tennisApi.js — Запросы к точным эндпоинтам API
 const axios = require('axios');
 
 const rapidApi = axios.create({
@@ -11,13 +11,15 @@ const rapidApi = axios.create({
 });
 
 module.exports = {
-  // 1. Поиск игроков
+  // 1. Поиск игроков (эндпоинт getPlayers)
   async searchPlayers(query, tour = 'atp') {
     const q = (query || '').trim();
     if (!q) return [];
 
     try {
-      const res = await rapidApi.get('/players', { params: { search: q } });
+      const res = await rapidApi.get('/getPlayers', { params: { search: q, tour } });
+      console.log('RapidAPI getPlayers Status:', res.status);
+
       if (res.data) {
         const list = Array.isArray(res.data) ? res.data : (res.data.data || res.data.results || []);
         return list.slice(0, 10).map(p => ({
@@ -29,15 +31,15 @@ module.exports = {
         }));
       }
     } catch (e) {
-      console.error('Ошибка RapidAPI Search:', e.message);
+      console.error('Ошибка getPlayers:', e.response ? e.response.status : e.message);
     }
     return [];
   },
 
-  // 2. Матчи игрока
+  // 2. Матчи игрока (эндпоинт getPlayerPastMatches / getPlayerFixtures)
   async getPlayerMatches(tour, id) {
     try {
-      const res = await rapidApi.get('/fixtures/player', { params: { player_id: id } });
+      const res = await rapidApi.get('/getPlayerPastMatches', { params: { player_id: id, tour } });
       const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
       return list.slice(0, 10).map((m, idx) => ({
         id: String(m.id || idx),
@@ -50,7 +52,7 @@ module.exports = {
         score: m.score || '—'
       }));
     } catch (e) {
-      console.error('Ошибка RapidAPI Matches:', e.message);
+      console.error('Ошибка getPlayerPastMatches:', e.message);
     }
     return [];
   },
@@ -58,10 +60,10 @@ module.exports = {
   // 3. Личные встречи H2H
   async getH2H(tour, player1, player2) {
     try {
-      const res = await rapidApi.get('/h2h', { params: { player1_id: player1, player2_id: player2 } });
+      const res = await rapidApi.get('/getH2HFixtures', { params: { player1_id: player1, player2_id: player2, tour } });
       if (res.data) return res.data;
     } catch (e) {
-      console.error('Ошибка RapidAPI H2H:', e.message);
+      console.error('Ошибка getH2HFixtures:', e.message);
     }
     return {
       total: { p1: 0, p2: 0 },
@@ -70,7 +72,6 @@ module.exports = {
     };
   },
 
-  // Вспомогательные методы
   async listPlayers() { return []; },
   async getPlayerProfile(tour, id) { return { id, name: 'Player', rank: '—' }; },
   async getPlayerTitles() { return 0; },
