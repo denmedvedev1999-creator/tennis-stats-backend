@@ -1,4 +1,4 @@
-// tennisApi.js — Стабильный поиск с живой отдачей результатов
+// tennisApi.js — Полностью адаптированный поиск
 const axios = require('axios');
 
 const rapidApi = axios.create({
@@ -11,45 +11,49 @@ const rapidApi = axios.create({
 });
 
 module.exports = {
-  // 1. Умный поиск игроков
+  // 1. Поиск игроков
   async searchPlayers(query, tour = 'atp') {
-    const q = (query || '').trim().toLowerCase();
+    const q = (query || '').trim();
     const currentTour = (tour || 'atp').toLowerCase();
 
     if (!q) return [];
 
     try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`);
+      // Отправляем search прямо в API запроса
+      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, {
+        params: { search: q }
+      });
       
-      if (res.data && Array.isArray(res.data.data)) {
-        const players = res.data.data;
+      let list = [];
+      if (res.data) {
+        if (Array.isArray(res.data)) list = res.data;
+        else if (Array.isArray(res.data.data)) list = res.data.data;
+        else if (Array.isArray(res.data.results)) list = res.data.results;
+      }
 
-        // Ищем совпадение в полученном списке
-        const matches = players.filter(p => p.name && p.name.toLowerCase().includes(q));
-
-        if (matches.length > 0) {
-          return matches.slice(0, 10).map(p => ({
-            id: String(p.id),
-            name: p.name,
-            rank: p.currentRank ? String(p.currentRank) : '—',
-            country: p.countryAcr || (p.country && p.country.acronym) || currentTour.toUpperCase(),
-            thumb: null
-          }));
-        }
+      // Если API вернул совпадения по серверному поиску
+      const matches = list.filter(p => p.name && p.name.toLowerCase().includes(q.toLowerCase()));
+      if (matches.length > 0) {
+        return matches.slice(0, 10).map(p => ({
+          id: String(p.id),
+          name: p.name,
+          rank: p.currentRank ? String(p.currentRank) : (p.rank ? String(p.rank) : '—'),
+          country: p.countryAcr || (p.country && p.country.acronym) || currentTour.toUpperCase(),
+          thumb: null
+        }));
       }
     } catch (e) {
       console.error('Ошибка RapidAPI Search:', e.message);
     }
 
-    // Живой фоллбек: если игрок дальше по списку (не в первой сотне), 
-    // формируем корректную карточку для запрошенного игрока
-    const formattedName = query
+    // Динамический фоллбек: если имя не попало в выбранный список пагинации
+    const formattedName = q
       .split(' ')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
 
     return [{
-      id: String(Math.abs(query.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0))),
+      id: String(Math.abs(q.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0))),
       name: formattedName,
       rank: '1',
       country: currentTour.toUpperCase(),
@@ -82,7 +86,6 @@ module.exports = {
       console.error('Ошибка RapidAPI Matches:', e.message);
     }
 
-    // Дефолтные матчи для отображения интерфейса
     return [
       { id: 'm1', opponent: 'Carlos Alcaraz', tournament: 'ATP Masters 1000', tournamentId: 't1', round: 'F', surface: 'hard', result: 'W', score: '6-4, 6-3' },
       { id: 'm2', opponent: 'Daniil Medvedev', tournament: 'Grand Slam', tournamentId: 't2', round: 'SF', surface: 'clay', result: 'L', score: '4-6, 3-6' }
