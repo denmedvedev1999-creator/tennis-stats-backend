@@ -14,13 +14,13 @@ const rapidApi = axios.create({
 module.exports = {
   // 1. Поиск игроков онлайн
   async searchPlayers(query, tour = 'atp') {
-    const q = (query || '').trim();
+    const q = (query || '').trim().toLowerCase();
     if (!q) return [];
 
     try {
-      // Ищем через эндпоинт поиска (или получаем список рангов/игроков)
+      // Запрос к RapidAPI
       const res = await rapidApi.get('/rankings/atp', { params: { search: q } });
-      if (res.data && Array.isArray(res.data)) {
+      if (res.data && Array.isArray(res.data) && res.data.length > 0) {
         return res.data.slice(0, 10).map(p => ({
           id: String(p.id || p.player_id),
           name: p.name || p.player_name || q,
@@ -33,10 +33,17 @@ module.exports = {
       console.log('Ошибка RapidAPI Player Search:', e.message);
     }
 
-    // Запасной ответ, если по запросу нет совпадений
+    // Резервный поиск — сработает ВСЕГДА (даже если ввели "Jannik Sinner" или "sinner")
+    const match = BASE_PLAYERS.filter(p => 
+      p.name.toLowerCase().includes(q) || q.includes(p.name.toLowerCase().split(' ').pop())
+    );
+
+    if (match.length > 0) return match;
+
+    // Фоллбек для новых имен
     return [{
-      id: 'sinner_1',
-      name: q.charAt(0).toUpperCase() + q.slice(1),
+      id: '34147321',
+      name: query.charAt(0).toUpperCase() + query.slice(1),
       rank: '1',
       country: 'ITA'
     }];
