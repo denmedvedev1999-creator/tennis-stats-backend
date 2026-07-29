@@ -1,4 +1,4 @@
-// tennisApi.js — Идеальный маппинг под реальную структуру RapidAPI
+// tennisApi.js — Рабочий маппинг под реальную структуру RapidAPI
 const axios = require('axios');
 
 const rapidApi = axios.create({
@@ -11,7 +11,7 @@ const rapidApi = axios.create({
 });
 
 module.exports = {
-  // 1. Поиск игроков с точной фильтрацией по name
+  // 1. Поиск игроков с фильтрацией по name
   async searchPlayers(query, tour = 'atp') {
     const q = (query || '').trim().toLowerCase();
     const currentTour = (tour || 'atp').toLowerCase();
@@ -22,7 +22,6 @@ module.exports = {
       if (res.data && Array.isArray(res.data.data)) {
         let players = res.data.data;
 
-        // Если ввели текст — фильтруем массив по имени
         if (q) {
           players = players.filter(p => p.name && p.name.toLowerCase().includes(q));
         }
@@ -88,5 +87,4 @@ module.exports = {
   async getPlayerProfile(tour, id) { return { id, name: 'Player', rank: '—' }; },
   async getPlayerTitles() { return 0; },
   async getPlayerTournamentPath() { return []; }
-};
 };
