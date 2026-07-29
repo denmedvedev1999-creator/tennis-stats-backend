@@ -1,4 +1,4 @@
-// tennisApi.js — Полностью рабочий адаптер под v2 API
+// tennisApi.js — Идеальный маппинг под реальную структуру RapidAPI
 const axios = require('axios');
 
 const rapidApi = axios.create({
@@ -11,37 +11,32 @@ const rapidApi = axios.create({
 });
 
 module.exports = {
-  // 1. Поиск игроков (эндпоинт /tennis/v2/{tour}/player/)
+  // 1. Поиск игроков с точной фильтрацией по name
   async searchPlayers(query, tour = 'atp') {
-    const q = (query || '').trim();
-    if (!q) return [];
-
+    const q = (query || '').trim().toLowerCase();
     const currentTour = (tour || 'atp').toLowerCase();
 
     try {
-      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, { 
-        params: { search: q } 
-      });
+      const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`);
       
-      console.log(`RapidAPI status (${currentTour}):`, res.status);
-      // Выводим реальную структуру ответа API в консоль:
-      console.log('DATA FROM API:', JSON.stringify(res.data).slice(0, 300));
+      if (res.data && Array.isArray(res.data.data)) {
+        let players = res.data.data;
 
-      if (res.data) {
-        const list = Array.isArray(res.data) 
-          ? res.data 
-          : (res.data.data || res.data.results || res.data.players || []);
+        // Если ввели текст — фильтруем массив по имени
+        if (q) {
+          players = players.filter(p => p.name && p.name.toLowerCase().includes(q));
+        }
 
-        return list.slice(0, 10).map(p => ({
-          id: String(p.id || p.player_id || p.ID || p.key || Date.now()),
-          name: p.name || p.full_name || p.player_name || p.title || q,
-          rank: p.rank || p.ranking || '—',
-          country: p.country || p.country_code || currentTour.toUpperCase(),
-          thumb: p.image || p.image_path || null
+        return players.slice(0, 15).map(p => ({
+          id: String(p.id),
+          name: p.name || 'Unknown Player',
+          rank: p.currentRank ? String(p.currentRank) : '—',
+          country: p.countryAcr || (p.country && p.country.acronym) || currentTour.toUpperCase(),
+          thumb: null
         }));
       }
     } catch (e) {
-      console.error('Ошибка RapidAPI Search:', e.response ? e.response.status : e.message);
+      console.error('Ошибка RapidAPI Search:', e.message);
     }
     return [];
   },
@@ -93,4 +88,5 @@ module.exports = {
   async getPlayerProfile(tour, id) { return { id, name: 'Player', rank: '—' }; },
   async getPlayerTitles() { return 0; },
   async getPlayerTournamentPath() { return []; }
+};
 };
