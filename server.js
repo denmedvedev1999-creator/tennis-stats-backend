@@ -1,4 +1,5 @@
 // server.js
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const tennisApi = require('./tennisApi');
@@ -7,35 +8,48 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Простой хелпер для асинхронных роутов
-const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const cache = new Map();
 
-// Простейший In-Memory Кэш
-const cacheStore = new Map();
-const TTL = { SEARCH: 300, PROFILE: 600, MATCHES: 300, TOURNAMENT_PATH: 600, H2H: 600 };
-
-async function cached(key, ttlSeconds, fetcher) {
-  const now = Date.now();
-  if (cacheStore.has(key)) {
-    const item = cacheStore.get(key);
-    if (now < item.expiresAt && item.data && item.data.length > 0) {
-      return item.data;
-    }
+function cacheGet(key) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    cache.delete(key);
+    return null;
   }
-  const data = await fetcher();
-  if (data) {
-    cacheStore.set(key, { data, expiresAt: now + ttlSeconds * 1000 });
-  }
-  return data;
+  return hit.value;
 }
 
-// 1. Поиск игрока
+function cacheSet(key, value, ttlSeconds) {
+  cache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+}
+
+async function cached(key, ttlSeconds, fn) {
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  const value = await fn();
+  if (value) cacheSet(key, value, ttlSeconds);
+  return value;
+}
+
+const TTL = {
+  SEARCH: 60 * 60 * 24,
+  PROFILE: 60 * 60 * 6,
+  MATCHES: 60 * 60,
+  TOURNAMENT_PATH: 60 * 60 * 24,
+  H2H: 60 * 60 * 24,
+};
+
+function asyncRoute(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+// 1. Поиск игроков
 app.get('/api/players/search', asyncRoute(async (req, res) => {
   const { q = '', tour = 'atp' } = req.query;
   if (!q.trim()) return res.json([]);
 
   const key = `search:${tour}:${q.toLowerCase()}`;
-  
   const result = await cached(key, TTL.SEARCH, async () => {
     return await tennisApi.searchPlayers(q, tour);
   });
@@ -48,11 +62,8 @@ app.get('/api/players/:tour/:id', asyncRoute(async (req, res) => {
   const { tour, id } = req.params;
   const key = `profile:${tour}:${id}`;
   const result = await cached(key, TTL.PROFILE, async () => {
-    const [profile, titles] = await Promise.all([
-      tennisApi.getPlayerProfile(tour, id),
-      tennisApi.getPlayerTitles(tour, id).catch(() => null),
-    ]);
-    return { ...profile, titles };
+    const profile = await tennisApi.getPlayerProfile(tour, id);
+    return profile;
   });
   res.json(result);
 }));
@@ -78,7 +89,7 @@ app.get('/api/players/:tour/:id/tournaments/:tournamentId', asyncRoute(async (re
   res.json(result);
 }));
 
-// 5. H2H Сравнение
+// 5. H2H
 app.get('/api/h2h', asyncRoute(async (req, res) => {
   const { tour = 'atp', player1, player2 } = req.query;
   if (!player1 || !player2) {
