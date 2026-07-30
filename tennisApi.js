@@ -1,4 +1,4 @@
-// tennisApi.js — Полная передача реального имени и ранга в профиль
+// tennisApi.js
 const axios = require('axios');
 
 const rapidApi = axios.create({
@@ -61,10 +61,9 @@ module.exports = {
     }];
   },
 
-  // 2. Умный профиль (без надписи TENNIS PLAYER)
+  // 2. Профиль
   async getPlayerProfile(tour, id) {
     const currentTour = (tour || 'atp').toLowerCase();
-    
     try {
       const res = await rapidApi.get(`/tennis/v2/${currentTour}/player/`, { params: { id } });
       let p = null;
@@ -91,7 +90,6 @@ module.exports = {
       console.error('Ошибка RapidAPI Profile:', e.message);
     }
 
-    // Если детальный профиль по ID не ответил, отдаем корректную заглушку без фейкового "TENNIS PLAYER"
     return {
       id: String(id),
       name: 'Игрок ' + currentTour.toUpperCase(),
@@ -102,7 +100,7 @@ module.exports = {
     };
   },
 
-  // 3. Матчи игрока
+  // 3. Матчи
   async getPlayerMatches(tour, id) {
     const currentTour = (tour || 'atp').toLowerCase();
     try {
@@ -129,8 +127,7 @@ module.exports = {
 
     return [
       { id: 'm1', opponent: 'Carlos Alcaraz', tournament: 'ATP Masters 1000', tournamentId: 't1', round: 'F', surface: 'hard', result: 'W', score: '6-4, 6-3' },
-      { id: 'm2', opponent: 'Daniil Medvedev', tournament: 'Grand Slam', tournamentId: 't2', round: 'SF', surface: 'clay', result: 'L', score: '4-6, 3-6' },
-      { id: 'm3', opponent: 'Alexander Zverev', tournament: 'ATP 500', tournamentId: 't3', round: 'QF', surface: 'grass', result: 'W', score: '7-6, 6-4' }
+      { id: 'm2', opponent: 'Daniil Medvedev', tournament: 'Grand Slam', tournamentId: 't2', round: 'SF', surface: 'clay', result: 'L', score: '4-6, 3-6' }
     ];
   },
 
