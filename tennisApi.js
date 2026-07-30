@@ -188,3 +188,56 @@ module.exports = {
     });
     const list = res.data?.data || [];
     return list.map((m) => {
+      const iAmPlayer1 = String(m.player1Id) === String(id);
+      const opponent = iAmPlayer1 ? m.player2 : m.player1;
+      return {
+        id: String(m.id),
+        date: m.date || null,
+        opponent: opponent ? normalizePlayer(opponent) : null,
+        tournament: m.tournament
+          ? { id: m.tournament.id, name: m.tournament.name, court: m.tournament.court || null }
+          : { id: m.tournamentId, name: null, court: null },
+        round: m.round ? m.round.name : null,
+        result: m.result || null, // счёт как есть, без выдумывания "6-4, 6-3"
+      };
+    });
+  },
+
+  // 6. Путь игрока по турниру (career record) — реальная реализация
+  async getPlayerTournamentPath(tour, id, tournamentId) {
+    const t = normalizeTour(tour);
+    const res = await rapidApi.get(
+      `/tennis/v2/ms-api/${t}/player/tournament-record/${id}/${tournamentId}`
+    );
+    return res.data?.data || [];
+  },
+
+  // 7. H2H — сводка + список матчей + агрегированная статистика
+  async getH2H(tour, player1, player2) {
+    const t = normalizeTour(tour);
+    const [infoRes, matchesRes, statsRes] = await Promise.allSettled([
+      rapidApi.get(`/tennis/v2/${t}/h2h/info/${player1}/${player2}`),
+      rapidApi.get(`/tennis/v2/${t}/h2h/matches/${player1}/${player2}`, {
+        params: { pageSize: 10, include: 'round,tournament' },
+      }),
+      rapidApi.get(`/tennis/v2/${t}/h2h/stats/${player1}/${player2}`),
+    ]);
+
+    const info = infoRes.status === 'fulfilled' ? infoRes.value.data : null;
+    const matches = matchesRes.status === 'fulfilled' ? matchesRes.value.data?.data || [] : [];
+    const stats = statsRes.status === 'fulfilled' ? statsRes.value.data?.data || null : null;
+
+    return {
+      player1: info?.player1 ? normalizePlayer(info.player1) : null,
+      player2: info?.player2 ? normalizePlayer(info.player2) : null,
+      wins: info ? { player1: info.player1Wins ?? 0, player2: info.player2Wins ?? 0 } : null,
+      matches: matches.map((m) => ({
+        id: String(m.id),
+        date: m.date || null,
+        result: m.result || null,
+        tournament: m.tournament ? { id: m.tournament.id, name: m.tournament.name } : null,
+      })),
+      stats,
+    };
+  },
+};
